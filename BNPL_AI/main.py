@@ -11,7 +11,7 @@ from ollama import chat
 MODEL = "qwen2.5:7b"
 
 INPUT_FILE = "data/bnpl.csv"
-OUTPUT_FILE = "output/bnpl_training.csv"
+OUTPUT_FILE = "output/bnpl_training_full.csv"
 
 SAVE_EVERY = 10
 
@@ -76,8 +76,8 @@ for c in new_columns:
 # PROCESS ROWS
 # =====================================================
 
-# for index, row in tqdm(df.iterrows(), total=len(df)):
-for index, row in tqdm(df.head(100).iterrows(), total=100):
+for index, row in tqdm(df.iterrows(), total=len(df)):
+# for index, row in tqdm(df.head(100).iterrows(), total=100):
     
     # Skip completed rows
     if pd.notna(row["Context"]) and str(row["Context"]).strip() != "":
