@@ -1,29 +1,62 @@
 import json
+import os
 import pandas as pd
 from tqdm import tqdm
 from ollama import chat
 
-# -----------------------------
-# Configuration
-# -----------------------------
+# =====================================================
+# CONFIGURATION
+# =====================================================
 
 MODEL = "qwen2.5:7b"
 
 INPUT_FILE = "data/bnpl.csv"
-
 OUTPUT_FILE = "output/bnpl_training.csv"
 
-# -----------------------------
-# Load Dataset
-# -----------------------------
+SAVE_EVERY = 10
 
-print("Loading dataset...")
+# =====================================================
+# JSON SCHEMA
+# =====================================================
 
-df = pd.read_csv(INPUT_FILE)
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "context": {"type": "string"},
+        "prompt": {"type": "string"},
+        "completion": {"type": "string"},
+        "risk": {"type": "string"},
+        "confidence": {"type": "string"},
+        "missing_information": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
+        "tags": {
+            "type": "array",
+            "items": {"type": "string"}
+        }
+    },
+    "required": [
+        "context",
+        "prompt",
+        "completion",
+        "risk",
+        "confidence",
+        "missing_information",
+        "tags"
+    ]
+}
 
-# -----------------------------
-# New Columns
-# -----------------------------
+# =====================================================
+# LOAD DATA
+# =====================================================
+
+if os.path.exists(OUTPUT_FILE):
+    print("Loading existing output file...")
+    df = pd.read_csv(OUTPUT_FILE)
+else:
+    print("Loading original dataset...")
+    df = pd.read_csv(INPUT_FILE)
 
 new_columns = [
     "Context",
@@ -35,29 +68,33 @@ new_columns = [
     "Tags"
 ]
 
-for column in new_columns:
-    if column not in df.columns:
-        df[column] = ""
+for c in new_columns:
+    if c not in df.columns:
+        df[c] = ""
 
-# -----------------------------
-# Process Rows
-# -----------------------------
+# =====================================================
+# PROCESS ROWS
+# =====================================================
 
-for index, row in tqdm(df.iterrows(), total=len(df)):
+# for index, row in tqdm(df.iterrows(), total=len(df)):
+for index, row in tqdm(df.head(100).iterrows(), total=100):
+    
+    # Skip completed rows
+    if pd.notna(row["Context"]) and str(row["Context"]).strip() != "":
+        continue
 
     prompt = f"""
-You are a senior Buy Now Pay Later (BNPL) fraud analyst.
+You are a senior Buy Now Pay Later (BNPL) fraud and credit risk analyst.
 
-Your task is to convert one structured transaction into AI training data.
+Analyze ONE transaction.
 
-Rules
+Rules:
 
-- ONLY use the provided information.
+- ONLY use provided information.
 - NEVER invent facts.
-- If information is missing, explicitly say so.
-- Be objective.
-- Return ONLY valid JSON.
-- Do not use markdown.
+- State when information is insufficient.
+- Be concise.
+- Do not speculate.
 
 Transaction
 
@@ -74,22 +111,6 @@ Connection Type: {row['Connection_Type']}
 Checkout Time Seconds: {row['Checkout_Time_Seconds']}
 Browser: {row['Browser']}
 Repayment Status: {row['Repayment_Status']}
-
-Return EXACTLY this JSON:
-
-{{
-    "context":"",
-    "prompt":"",
-    "completion":"",
-    "risk":"",
-    "confidence":"",
-    "missing_information":[
-        ""
-    ],
-    "tags":[
-        ""
-    ]
-}}
 """
 
     try:
@@ -101,37 +122,44 @@ Return EXACTLY this JSON:
                     "role": "user",
                     "content": prompt
                 }
-            ]
+            ],
+            format=SCHEMA
         )
 
-        content = response["message"]["content"].strip()
+        result = json.loads(response["message"]["content"])
 
-        # Remove accidental markdown fences
-        content = content.replace("```json", "")
-        content = content.replace("```", "").strip()
-
-        result = json.loads(content)
-
-        df.at[index, "Context"] = result.get("context", "")
-        df.at[index, "Prompt"] = result.get("prompt", "")
-        df.at[index, "Completion"] = result.get("completion", "")
-        df.at[index, "Risk"] = result.get("risk", "")
-        df.at[index, "Confidence"] = result.get("confidence", "")
-        df.at[index, "Missing_Information"] = ", ".join(
-            result.get("missing_information", [])
+        df.at[index, "Context"] = result["context"]
+        df.at[index, "Prompt"] = result["prompt"]
+        df.at[index, "Completion"] = result["completion"]
+        df.at[index, "Risk"] = result["risk"]
+        df.at[index, "Confidence"] = result["confidence"]
+        df.at[index, "Missing_Information"] = "; ".join(
+            result["missing_information"]
         )
-        df.at[index, "Tags"] = ", ".join(
-            result.get("tags", [])
+        df.at[index, "Tags"] = "; ".join(
+            result["tags"]
         )
 
     except Exception as e:
 
-        print(f"\nError processing row {index}")
+        print(f"\nRow {index} failed")
+
         print(e)
 
-# -----------------------------
-# Save
-# -----------------------------
+        with open("errors.log", "a", encoding="utf-8") as f:
+            f.write(f"\nRow {index}\n")
+            f.write(str(e))
+            f.write("\n")
+
+        continue
+
+    # Save periodically
+    if index % SAVE_EVERY == 0:
+        df.to_csv(OUTPUT_FILE, index=False)
+
+# =====================================================
+# FINAL SAVE
+# =====================================================
 
 df.to_csv(OUTPUT_FILE, index=False)
 
